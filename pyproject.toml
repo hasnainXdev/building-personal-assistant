@@ -1,0 +1,12 @@
+[project]
+name = "build-your-ai-agents"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "asyncio>=3.4.3",
+    "chainlit>=2.5.5",
+    "openai-agents>=0.0.19",
+    "python-dotenv>=1.1.0",
+]
