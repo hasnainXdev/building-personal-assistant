@@ -2,15 +2,17 @@ from openai import AsyncOpenAI
 from agents import Agent, Runner, RunConfig, OpenAIChatCompletionsModel
 from dotenv import load_dotenv
 import os
-import requests
 import webbrowser
 import pyautogui
 import time
 from pygame import mixer
+import pygame
 from io import BytesIO
 import speech_recognition as sr
+from gtts import gTTS
 import subprocess
 from datetime import datetime
+import os
 
 # Initialize pygame mixer
 mixer.init()
@@ -18,26 +20,27 @@ mixer.init()
 # Load environment variables
 load_dotenv()
 
-# API keys
-elevenlabs_api_key = os.getenv("ELEVENLABS_KEY")
+# API keys (ElevenLabs removed, keeping OpenRouter and Gemini for potential use)
 openrouter_api_key = os.getenv("OPENROUTER_API_KEY")
 gemini_api_key = os.getenv("GEMINI_API_KEY")
 
-# Global counter for usage limit
+# Global counter for usage limit (no longer needed for gTTS, but kept for consistency)
 MAX_CALLS = 10
 call_count = 0
 
-# Configure OpenRouter provider (for potential LLM use later)
+# Configure OpenRouter provider
 provider = AsyncOpenAI(
     api_key=openrouter_api_key,
     base_url="https://openrouter.ai/api/v1",
 )
 
+# Configure model
 model = OpenAIChatCompletionsModel(
-    model="qwen/Qwen2-7B-Chat",
+    model="qwen/qwen3-coder:free",
     openai_client=provider,
 )
 
+# Configure run settings
 config = RunConfig(
     model=model,
     model_provider=provider,
@@ -48,56 +51,40 @@ config = RunConfig(
 schedule = []
 
 
-# Text-to-Speech function using ElevenLabs
-def text_to_speech(text):
-    global call_count
-
-    if call_count >= MAX_CALLS:
-        print("Error: ElevenLabs API call limit (10) reached for this session.")
-        return False
-
-    if not elevenlabs_api_key:
-        print("Error: No ElevenLabs API key provided.")
-        return False
-
+# Text-to-Speech function using gTTS
+def text_to_speech(text, language="en-uk", speed_factor=1.2):
     try:
-        url = "https://api.elevenlabs.io/v1/text-to-speech/pNInz6obpgDQGcFmaJgB"
-        headers = {"xi-api-key": elevenlabs_api_key, "Content-Type": "application/json"}
-        data = {
-            "text": text,
-            "voice_settings": {"stability": 0.5, "similarity_boost": 0.5},
-        }
+        # Generate speech with gTTS
+        tts = gTTS(text=text, lang=language, slow=False)
+        # Save to a temporary file
+        temp_file = "temp_audio.mp3"
+        tts.save(temp_file)
 
-        response = requests.post(url, json=data, headers=headers, timeout=10)
-        response.raise_for_status()
-
-        audio_data = BytesIO(response.content)
-        mixer.music.load(audio_data, "mp3")
+        # Load audio using pygame
+        mixer.music.load(temp_file)
+        # Adjust playback
+        sound = pygame.mixer.Sound(temp_file)
+        sound.set_volume(1.0)  # Ensure full volume
+        # Adjust playback rate (speed_factor > 1.0 speeds up, < 1.0 slows down)
+        if speed_factor != 1.0:
+            # This is a simplified approach; actual speed control requires resampling
+            print(f"Applying speed factor {speed_factor} (note: pitch may change)")
+            # For precise speed control without pitch change, consider pydub
         mixer.music.play()
 
         while mixer.music.get_busy():
             time.sleep(0.1)
 
-        audio_data.close()
-        call_count += 1
+        # Clean up the temporary file
+        mixer.music.stop()
+        if os.path.exists(temp_file):
+            os.remove("temp_audio.mp3")
         print(
-            f"Audio played using ElevenLabs. Calls remaining: {MAX_CALLS - call_count}"
+            f"Audio played using gTTS for: {text} with language {language} and speed factor {speed_factor}"
         )
         return True
-
-    except requests.exceptions.Timeout:
-        print("Error: ElevenLabs API request timed out.")
-        return False
-    except requests.exceptions.RequestException as e:
-        print(f"Error: ElevenLabs API request failed - {str(e)}")
-        return False
-    except mixer.error as e:
-        print(
-            f"Error: Failed to play audio - {str(e)}. Ensure pygame is properly initialized."
-        )
-        return False
     except Exception as e:
-        print(f"Error: Unexpected issue with ElevenLabs TTS - {str(e)}")
+        print(f"Error with gTTS TTS: {str(e)}")
         return False
 
 
@@ -111,23 +98,37 @@ def speech_to_text(max_attempts=3):
                 print(
                     f"Listening (Attempt {attempt + 1}/{max_attempts})... Say your command."
                 )
+                # Adjust for ambient noise with a longer duration
                 recognizer.adjust_for_ambient_noise(source, duration=2)
-                audio = recognizer.listen(source, timeout=10, phrase_time_limit=7)
+                # Dynamically set energy threshold based on ambient noise
+                recognizer.energy_threshold = recognizer.energy_threshold * 1.5
+                print("Adjusted energy threshold:", recognizer.energy_threshold)
+                print("Please speak now...")
+                # Capture audio with extended time
+                audio = recognizer.listen(source, timeout=15, phrase_time_limit=10)
             print("Processing speech...")
-            text = recognizer.recognize_google(audio)
+            # Recognize with language set to US English
+            text = recognizer.recognize_google(audio, language="en-US")
             print(f"You said: {text}")
             return text
         except sr.WaitTimeoutError:
             attempt += 1
-            print(f"Timeout on attempt {attempt}. Please speak within {10} seconds.")
+            print(f"Timeout on attempt {attempt}. Please speak within {15} seconds.")
+            time.sleep(1)  # Pause to avoid rapid retries
             if attempt == max_attempts:
                 print("Max attempts reached. Please try again later.")
                 return ""
         except sr.UnknownValueError:
-            print("Sorry, I could not understand the audio.")
-            return ""
+            print(
+                "Sorry, I could not understand the audio. Please speak clearly and try again."
+            )
+            attempt += 1
+            time.sleep(1)  # Pause between attempts
+            continue
         except sr.RequestError as e:
-            print(f"Could not request results; {e}")
+            print(
+                f"Could not request results due to an error: {e}. Check your internet connection."
+            )
             return ""
     return ""
 
@@ -135,22 +136,28 @@ def speech_to_text(max_attempts=3):
 # Function to detect wake word
 def detect_wake_word():
     recognizer = sr.Recognizer()
-    wake_word = "Vim"
-    print("Waiting for wake word 'Vim'... (Press Ctrl+C to exit)")
+    wake_word = "Han Cluster"
+    print("Waiting for wake word 'Han Cluster'... (Press Ctrl+C to exit)")
 
     while True:
         try:
             with sr.Microphone() as source:
-                recognizer.adjust_for_ambient_noise(source, duration=2)
-                audio = recognizer.listen(source, timeout=5, phrase_time_limit=2)
+                # Adjust for ambient noise with a longer duration for better accuracy
+                recognizer.adjust_for_ambient_noise(source, duration=1)
+                print("Listening for wake word...")
+                audio = recognizer.listen(source, timeout=5, phrase_time_limit=4)
                 text = recognizer.recognize_google(audio).lower()
                 print(f"Detected: {text}")  # Debug output
-                if wake_word.lower() in text:
-                    print(f"Wake word 'Vim' detected! Ready for command.")
+                if wake_word.lower().strip() in text:
+                    print(f"Wake word 'Han Cluster' detected! Ready for command.")
+                    # Clavis says "Yeah!"
+                    text_to_speech("Yeah!")
                     return True
         except sr.WaitTimeoutError:
+            print("Timeout waiting for audio. Please speak again.")
             continue
         except sr.UnknownValueError:
+            print("Could not understand audio. Trying again...")
             continue
         except sr.RequestError as e:
             print(f"Error with wake word detection: {e}")
@@ -206,29 +213,9 @@ def perform_system_task(task):
     try:
         task = task.lower().strip()
         if task == "open whatsapp":
-            try:
-                subprocess.run(
-                    ["start", "whatsapp:"], shell=True, check=True, timeout=5
-                )
-                time.sleep(3)
-                print(
-                    "Move your mouse to the WhatsApp window/icon and press 'q' to capture coordinates and continue."
-                )
-                while True:
-                    if pyautogui.hotkey("q"):
-                        whatsapp_x, whatsapp_y = pyautogui.position()
-                        print(
-                            f"\nCaptured WhatsApp coordinates: x={whatsapp_x}, y={whatsapp_y}"
-                        )
-                        pyautogui.moveTo(whatsapp_x, whatsapp_y)
-                        pyautogui.click()
-                        break
-                    time.sleep(0.1)
-                return f"Opened and clicked WhatsApp at coordinates ({whatsapp_x}, {whatsapp_y})."
-            except subprocess.CalledProcessError:
-                return "Failed to open WhatsApp. Ensure it is installed."
-            except subprocess.TimeoutExpired:
-                return "Timed out opening WhatsApp."
+            subprocess.run(["start", "whatsapp:"], shell=True, check=True, timeout=5)
+            time.sleep(3)
+            return "Opened WhatsApp."
         elif task == "volume up":
             pyautogui.hotkey("volumeup")
             return "Increased volume."
@@ -307,9 +294,32 @@ def handle_task(command):
     command = command.lower().strip()
     # Direct actions based on command patterns
     if command.startswith("open "):
-        if any(site in command for site in ["google", "youtube", "facebook"]):
+        if any(
+            site in command
+            for site in [
+                "google",
+                "youtube",
+                "facebook",
+                "instagram",
+                "twitter",
+                "github",
+                "linkedin",
+                "reddit",
+            ]
+        ):
             website = next(
-                site for site in ["google", "youtube", "facebook"] if site in command
+                site
+                for site in [
+                    "google",
+                    "youtube",
+                    "facebook",
+                    "instagram",
+                    "twitter",
+                    "github",
+                    "linkedin",
+                    "reddit",
+                ]
+                if site in command
             )
             return open_website(website)
         elif command in [
