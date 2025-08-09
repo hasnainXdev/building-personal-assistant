@@ -13,6 +13,7 @@ from gtts import gTTS
 import subprocess
 from datetime import datetime
 import os
+import pyttsx3
 
 # Initialize pygame mixer
 mixer.init()
@@ -47,44 +48,28 @@ config = RunConfig(
     tracing_disabled=True,
 )
 
-# Simulated data storage (in-memory for simplicity)
-schedule = []
-
 
 # Text-to-Speech function using gTTS
-def text_to_speech(text, language="en-uk", speed_factor=1.2):
+def text_to_speech(text, speed_factor=1.2):
     try:
-        # Generate speech with gTTS
-        tts = gTTS(text=text, lang=language, slow=False)
-        # Save to a temporary file
-        temp_file = "temp_audio.mp3"
-        tts.save(temp_file)
+        engine = pyttsx3.init()
 
-        # Load audio using pygame
-        mixer.music.load(temp_file)
-        # Adjust playback
-        sound = pygame.mixer.Sound(temp_file)
-        sound.set_volume(1.0)  # Ensure full volume
-        # Adjust playback rate (speed_factor > 1.0 speeds up, < 1.0 slows down)
-        if speed_factor != 1.0:
-            # This is a simplified approach; actual speed control requires resampling
-            print(f"Applying speed factor {speed_factor} (note: pitch may change)")
-            # For precise speed control without pitch change, consider pydub
-        mixer.music.play()
+        # Optional voice selection (male/female or specific language)
+        voices = engine.getProperty("voices")
+        for voice in voices:
+            if "english" in voice.name.lower():
+                engine.setProperty("voice", voice.id)
+                break
 
-        while mixer.music.get_busy():
-            time.sleep(0.1)
+        engine.setProperty("rate", int(200 * speed_factor))  # default is around 200
+        engine.setProperty("volume", 1.0)
 
-        # Clean up the temporary file
-        mixer.music.stop()
-        if os.path.exists(temp_file):
-            os.remove("temp_audio.mp3")
-        print(
-            f"Audio played using gTTS for: {text} with language {language} and speed factor {speed_factor}"
-        )
+        engine.say(text)
+        engine.runAndWait()
+        print(f"Spoken using pyttsx3: {text}")
         return True
     except Exception as e:
-        print(f"Error with gTTS TTS: {str(e)}")
+        print(f"Error with pyttsx3 TTS: {e}")
         return False
 
 
@@ -136,8 +121,8 @@ def speech_to_text(max_attempts=3):
 # Function to detect wake word
 def detect_wake_word():
     recognizer = sr.Recognizer()
-    wake_word = "Han Cluster"
-    print("Waiting for wake word 'Han Cluster'... (Press Ctrl+C to exit)")
+    wake_word = "Cluster"
+    print("Waiting for wake word 'Cluster'... (Press Ctrl+C to exit)")
 
     while True:
         try:
@@ -149,7 +134,7 @@ def detect_wake_word():
                 text = recognizer.recognize_google(audio).lower()
                 print(f"Detected: {text}")  # Debug output
                 if wake_word.lower().strip() in text:
-                    print(f"Wake word 'Han Cluster' detected! Ready for command.")
+                    print(f"Wake word 'Cluster' detected! Ready for command.")
                     # Clavis says "Yeah!"
                     text_to_speech("Yeah!")
                     return True
@@ -194,19 +179,6 @@ def perform_google_search(query):
         return "Search operation interrupted (moved mouse to top-left corner)."
     except Exception as e:
         return f"Search operation failed. Error: {str(e)}"
-
-
-def set_reminder(time_str, task):
-    schedule.append({"time": time_str, "task": task})
-    return f"Reminder set for {time_str} - {task}"
-
-
-def check_schedule():
-    return (
-        "\n".join([f"{s['time']} - {s['task']}" for s in schedule])
-        if schedule
-        else "No reminders scheduled."
-    )
 
 
 def perform_system_task(task):
@@ -305,6 +277,8 @@ def handle_task(command):
                 "github",
                 "linkedin",
                 "reddit",
+                "figma",
+                "notion",
             ]
         ):
             website = next(
@@ -318,6 +292,8 @@ def handle_task(command):
                     "github",
                     "linkedin",
                     "reddit",
+                    "figma",
+                    "notion",
                 ]
                 if site in command
             )
@@ -334,13 +310,6 @@ def handle_task(command):
         return (
             perform_google_search(query) if query else "Please specify a search query."
         )
-    elif command.startswith("set reminder "):
-        parts = command.replace("set reminder ", "").strip().split(" ", 1)
-        if len(parts) == 2:
-            time_str, task_desc = parts
-            return set_reminder(time_str, task_desc)
-    elif command == "check schedule":
-        return check_schedule()
     elif command in [
         "volume up",
         "volume down",
